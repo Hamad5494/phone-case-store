@@ -1,0 +1,105 @@
+// prisma/schema.prisma
+//
+// SQLite for local prototyping. To move to PostgreSQL:
+//   1. change `provider` to "postgresql"
+//   2. set DATABASE_URL to your Postgres connection string
+//   3. run `npx prisma migrate dev`
+// Nothing else in this schema is SQLite-specific (no enums, no Decimal; money is stored as integer cents).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A phone case DESIGN (artwork). One design fits many phone models via Variants.
+model Product {
+  id          String    @id @default(cuid())
+  name        String
+  description String
+  /// Base price in cents (e.g. 2499 = $24.99). Variants may add a price adjustment.
+  basePrice   Int
+  image       String
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  variants    Variant[]
+}
+
+/// A specific phone model, e.g. brand "Apple", name "iPhone 15 Pro".
+model PhoneModel {
+  id        String    @id @default(cuid())
+  name      String
+  brand     String
+  /// Display group, e.g. "iPhone 15 series" or "Galaxy S24 series".
+  series    String    @default("")
+  /// Chronological order inside the dropdowns (lower = older).
+  sortOrder Int       @default(0)
+
+  variants  Variant[]
+
+  @@unique([brand, name])
+  @@index([brand, sortOrder])
+}
+
+/// The sellable unit: Product (design) x PhoneModel x caseType.
+/// This is the row the cart references and the checkout decrements.
+model Variant {
+  id               String      @id @default(cuid())
+  productId        String
+  phoneModelId     String
+  /// Case construction / colorway shown as swatches on the PDP (e.g. "Slim", "Tough").
+  caseType         String      @default("Slim")
+  sku              String      @unique
+  stock            Int         @default(0)
+  /// Added to Product.basePrice (cents). Lets "Tough" cost more than "Slim".
+  priceAdjustment  Int         @default(0)
+  /// Optional variant-specific image; falls back to Product.image when null.
+  image            String?
+
+  product          Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
+  phoneModel       PhoneModel  @relation(fields: [phoneModelId], references: [id], onDelete: Restrict)
+  orderItems       OrderItem[]
+
+  @@unique([productId, phoneModelId, caseType])
+  @@index([productId])
+  @@index([phoneModelId])
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  customerName  String
+  email         String
+  /// Order total in cents, computed server-side from DB prices (never trusted from the client).
+  totalCents    Int
+  /// "PAID" | "PENDING" | "CANCELLED" | "FULFILLED" (string instead of enum for SQLite compatibility).
+  status        String      @default("PAID")
+  createdAt     DateTime    @default(now())
+
+  items         OrderItem[]
+
+  @@index([email])
+}
+
+model OrderItem {
+  id               String   @id @default(cuid())
+  orderId          String
+  variantId        String
+  quantity         Int
+  /// Price per unit in cents at the time of purchase (snapshot).
+  unitPriceCents   Int
+  /// Snapshots so historical orders stay readable even if catalog data changes.
+  productName      String
+  phoneModelName   String
+  phoneBrand       String
+  caseType         String
+
+  order            Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  variant          Variant  @relation(fields: [variantId], references: [id], onDelete: Restrict)
+
+  @@index([orderId])
+  @@index([variantId])
+}
